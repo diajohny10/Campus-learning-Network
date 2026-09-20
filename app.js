@@ -14,7 +14,7 @@ class CampusNetApp {
     this.subjects = ['CN', 'DS', 'DMS', 'ECON', 'UHV', 'COA'];
     
     // Live HTTPS API Server URL
-    this.apiBase = 'https://36b650f32864ac.lhr.life/api';
+  this.apiBase = 'https://offline-campus-learning-network-backend.onrender.com/api';
 
     this.initData();
     this.render();
