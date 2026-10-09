@@ -1,104 +1,103 @@
 /**
- * CampusLink - Live Netlify + Public HTTPS Backend Integration
- * API Base: https://36b650f32864ac.lhr.life/api
+ * CampusLink - Private Campus Learning Network (Frontend)
  */
+
+const API_BASE_URL = (window.CAMPUSLINK_CONFIG && window.CAMPUSLINK_CONFIG.API_BASE_URL) || 'http://localhost:5000/api';
 
 class CampusNetApp {
   constructor() {
+    this.apiBase = API_BASE_URL;
     this.currentUser = null;
+    this.token = null;
+    
     this.activeTeacherSubject = 'CN';
     this.activeStudentSubject = 'ALL';
     this.activeTeacherTab = 'resources';
     this.activeStudentTab = 'resources';
     
     this.subjects = ['CN', 'DS', 'DMS', 'ECON', 'UHV', 'COA'];
-    
-    // Live HTTPS API Server URL
-  this.apiBase = 'https://offline-campus-learning-network-backend.onrender.com/api';
+    this.resources = [];
+    this.students = [];
+    this.transfers = [];
 
-    this.initData();
-    this.render();
+    this.init();
   }
 
-  async initData() {
-    const savedStudents = localStorage.getItem('campusnet_students');
-    this.students = savedStudents ? JSON.parse(savedStudents) : [
-      { id: 'CS2026-001', name: 'Alice Smith', section: 'CS Sec A', password: 'student123' },
-      { id: 'CS2026-002', name: 'Bob Martin', section: 'CS Sec A', password: 'student123' },
-      { id: 'CS2026-003', name: 'Charlie Davis', section: 'CS Sec B', password: 'student123' },
-      { id: 'CS2026-004', name: 'Diana Prince', section: 'CS Sec A', password: 'student123' }
-    ];
+  async init() {
+    // Restore session from sessionStorage
+    const storedToken = sessionStorage.getItem('campusnet_token');
+    const storedUser = sessionStorage.getItem('campusnet_user');
 
-    const savedResources = localStorage.getItem('campusnet_resources');
-    this.resources = savedResources ? JSON.parse(savedResources) : [
-      { id: 1, name: 'Module 1 Notes.pdf', subject: 'CN', uploadedBy: 'Teacher CN', date: '2025-05-12', size: '2.4 MB' },
-      { id: 2, name: 'Network Topologies.pdf', subject: 'CN', uploadedBy: 'Teacher CN', date: '2025-05-13', size: '1.8 MB' },
-      { id: 3, name: 'OSI Model.pdf', subject: 'CN', uploadedBy: 'Teacher CN', date: '2025-05-14', size: '1.3 MB' }
-    ];
-
-    const savedTransfers = localStorage.getItem('campusnet_transfers');
-    this.transfers = savedTransfers ? JSON.parse(savedTransfers) : [
-      { id: 101, from: 'Alice Smith', to: 'Bob Martin', type: 'student_to_student', fileName: 'project_draft.pdf', date: '10:31:12', timestamp: '2026-09-07 10:31:12' }
-    ];
-
-    // Live HTTPS API sync
-    if (this.apiBase) {
+    if (storedToken && storedUser) {
+      this.token = storedToken;
       try {
-        const res = await Promise.race([
-          fetch(`${this.apiBase}/resources`),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
-        ]);
+        this.currentUser = JSON.parse(storedUser);
+        const res = await fetch(`${this.apiBase}/auth/session`, {
+          headers: this.getAuthHeaders()
+        });
         if (res.ok) {
           const data = await res.json();
-          if (data.resources && data.resources.length) this.resources = data.resources;
+          this.currentUser = data.user;
+          sessionStorage.setItem('campusnet_user', JSON.stringify(this.currentUser));
+          
+          if (this.currentUser.role === 'teacher') {
+            this.activeTeacherSubject = this.currentUser.subjectCode || 'CN';
+            await this.loadResources();
+            await this.loadStudentRoster();
+            await this.loadTransfers();
+            this.renderTeacherDashboard();
+            this.showView('teacher-dashboard');
+            return;
+          } else {
+            await this.loadResources();
+            await this.loadTransfers();
+            this.renderStudentDashboard();
+            this.showView('student-dashboard');
+            return;
+          }
         }
-      } catch (e) {
-        // Fallback
+      } catch (err) {
+        console.warn('Session verification failed:', err.message);
       }
-
-      try {
-        const resStud = await fetch(`${this.apiBase}/students`);
-        if (resStud.ok) {
-          const dataStud = await resStud.json();
-          if (dataStud.students && dataStud.students.length) this.students = dataStud.students;
-        }
-      } catch (e) {}
-
-      try {
-        const resTrans = await fetch(`${this.apiBase}/transfers`);
-        if (resTrans.ok) {
-          const dataTrans = await resTrans.json();
-          if (dataTrans.transfers && dataTrans.transfers.length) this.transfers = dataTrans.transfers;
-        }
-      } catch (e) {}
     }
 
-    this.updateStudentDropdowns();
+    // Clear stale session
+    this.token = null;
+    this.currentUser = null;
+    sessionStorage.removeItem('campusnet_token');
+    sessionStorage.removeItem('campusnet_user');
+    this.showView('landing');
   }
 
-  saveStudents() {
-    localStorage.setItem('campusnet_students', JSON.stringify(this.students));
-    this.updateStudentDropdowns();
+  getAuthHeaders(contentType = null) {
+    const headers = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+    if (contentType) {
+      headers['Content-Type'] = contentType;
+    }
+    return headers;
   }
 
-  saveResources() {
-    localStorage.setItem('campusnet_resources', JSON.stringify(this.resources));
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
-  saveTransfers() {
-    localStorage.setItem('campusnet_transfers', JSON.stringify(this.transfers));
-  }
-
-  updateStudentDropdowns() {
-    const teacherRecipientEl = document.getElementById('teacher-send-recipient-student');
-    const studentRecipientEl = document.getElementById('transfer-recipient-student');
-
-    const optionsHtml = (this.students || []).map(s => `
-      <option value="${s.name}">${s.name} (${s.section})</option>
-    `).join('');
-
-    if (teacherRecipientEl) teacherRecipientEl.innerHTML = optionsHtml;
-    if (studentRecipientEl) studentRecipientEl.innerHTML = optionsHtml;
+  formatBytes(bytes) {
+    if (typeof bytes !== 'number' || isNaN(bytes) || bytes < 0) return '0 B';
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const val = parseFloat((bytes / Math.pow(k, i)).toFixed(1));
+    return `${val} ${sizes[i]}`;
   }
 
   showView(viewId) {
@@ -117,9 +116,9 @@ class CampusNetApp {
       navLogout.style.display = 'inline-flex';
 
       if (this.currentUser.role === 'teacher') {
-        navUser.innerHTML = `<span class="user-badge"><span class="role-dot teacher"></span> Teacher (${this.currentUser.subjectCode})</span>`;
+        navUser.innerHTML = `<span class="user-badge"><span class="role-dot teacher"></span> Teacher (${this.escapeHtml(this.currentUser.subjectCode)})</span>`;
       } else {
-        navUser.innerHTML = `<span class="user-badge"><span class="role-dot student"></span> Student (${this.currentUser.name})</span>`;
+        navUser.innerHTML = `<span class="user-badge"><span class="role-dot student"></span> Student (${this.escapeHtml(this.currentUser.name)})</span>`;
       }
     } else {
       navUser.style.display = 'none';
@@ -129,6 +128,7 @@ class CampusNetApp {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // --- AUTHENTICATION HANDLERS ---
   async handleTeacherLogin(e) {
     e.preventDefault();
     const subjectCode = document.getElementById('teacher-subject-code').value;
@@ -148,26 +148,26 @@ class CampusNetApp {
 
       const data = await response.json();
       if (response.ok && data.success) {
+        this.token = data.token;
         this.currentUser = data.user;
+
+        sessionStorage.setItem('campusnet_token', this.token);
+        sessionStorage.setItem('campusnet_user', JSON.stringify(this.currentUser));
+
         this.activeTeacherSubject = subjectCode;
         this.showToast(`Logged in as Subject Teacher for ${subjectCode}`, 'success');
+
+        await this.loadResources();
+        await this.loadStudentRoster();
+        await this.loadTransfers();
+
         this.renderTeacherDashboard();
         this.showView('teacher-dashboard');
-        return;
       } else {
-        this.showToast(data.message || 'Invalid Password', 'error');
-        return;
+        this.showToast(data.message || 'Login failed', 'error');
       }
     } catch (err) {
-      if (password === 'teacher123') {
-        this.currentUser = { role: 'teacher', name: `Teacher ${subjectCode}`, subjectCode: subjectCode };
-        this.activeTeacherSubject = subjectCode;
-        this.showToast(`Logged in as Subject Teacher for ${subjectCode}`, 'success');
-        this.renderTeacherDashboard();
-        this.showView('teacher-dashboard');
-      } else {
-        this.showToast('Invalid Password. (Use teacher123)', 'error');
-      }
+      this.showToast('Unable to connect to backend server. Make sure server is running on port 5000.', 'error');
     }
   }
 
@@ -190,56 +190,152 @@ class CampusNetApp {
 
       const data = await response.json();
       if (response.ok && data.success) {
+        this.token = data.token;
         this.currentUser = data.user;
+
+        sessionStorage.setItem('campusnet_token', this.token);
+        sessionStorage.setItem('campusnet_user', JSON.stringify(this.currentUser));
+
         this.showToast(`Welcome back, ${data.user.name}!`, 'success');
+
+        await this.loadResources();
+        await this.loadTransfers();
+
         this.renderStudentDashboard();
         this.showView('student-dashboard');
-        return;
       } else {
         this.showToast(data.message || 'Authentication failed', 'error');
-        return;
       }
     } catch (err) {
-      const student = (this.students || []).find(s => s.name.toLowerCase() === nameInput.toLowerCase());
-      if (student && student.password === passwordInput) {
-        this.currentUser = { role: 'student', name: student.name, studentId: student.id, section: student.section };
-        this.showToast(`Welcome back, ${student.name}!`, 'success');
-        this.renderStudentDashboard();
-        this.showView('student-dashboard');
-      } else if (!student) {
-        this.showToast(`Student "${nameInput}" is not registered. Ask your teacher to register you!`, 'error');
-      } else {
-        this.showToast('Incorrect password for registered student.', 'error');
-      }
+      this.showToast('Unable to connect to backend server. Make sure server is running on port 5000.', 'error');
     }
   }
 
-  logout() {
+  async logout() {
+    if (this.token) {
+      try {
+        await fetch(`${this.apiBase}/auth/logout`, {
+          method: 'POST',
+          headers: this.getAuthHeaders()
+        });
+      } catch (err) {}
+    }
+
+    this.token = null;
     this.currentUser = null;
+    this.resources = [];
+    this.students = [];
+    this.transfers = [];
+
+    sessionStorage.removeItem('campusnet_token');
+    sessionStorage.removeItem('campusnet_user');
+
     this.showToast('Logged out successfully', 'info');
     this.showView('landing');
   }
 
+  // --- DATA LOADING FROM SERVER ---
+  async loadResources() {
+    if (!this.token) return;
+
+    try {
+      const res = await fetch(`${this.apiBase}/resources`, {
+        headers: this.getAuthHeaders()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        this.resources = data.resources || [];
+        
+        if (this.currentUser) {
+          if (this.currentUser.role === 'teacher') {
+            this.renderTeacherDashboard();
+          } else {
+            this.renderStudentDashboard();
+          }
+        }
+      } else if (res.status === 401) {
+        this.showToast('Session expired. Please log in again.', 'error');
+        this.logout();
+      }
+    } catch (err) {
+      this.showToast('Error loading resources from server.', 'error');
+    }
+  }
+
+  async loadStudentRoster() {
+    if (!this.token || !this.currentUser || this.currentUser.role !== 'teacher') return;
+
+    try {
+      const res = await fetch(`${this.apiBase}/students`, {
+        headers: this.getAuthHeaders()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        this.students = data.students || [];
+        this.updateStudentDropdowns();
+        this.renderRegisteredStudentsRoster();
+      }
+    } catch (err) {}
+  }
+
+  async loadTransfers() {
+    if (!this.token) return;
+
+    try {
+      const res = await fetch(`${this.apiBase}/transfers`, {
+        headers: this.getAuthHeaders()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        this.transfers = data.transfers || [];
+        if (this.currentUser && this.currentUser.role === 'teacher') {
+          this.renderTeacherInboxTable();
+          this.renderTeacherAuditLogs();
+        } else if (this.currentUser && this.currentUser.role === 'student') {
+          this.renderStudentInboxTable();
+        }
+      }
+    } catch (err) {}
+  }
+
+  updateStudentDropdowns() {
+    const teacherRecipientEl = document.getElementById('teacher-send-recipient-student');
+    const studentRecipientEl = document.getElementById('transfer-recipient-student');
+
+    const optionsHtml = (this.students || []).map(s => `
+      <option value="${this.escapeHtml(s.name)}">${this.escapeHtml(s.name)} (${this.escapeHtml(s.section)})</option>
+    `).join('');
+
+    if (teacherRecipientEl) teacherRecipientEl.innerHTML = optionsHtml;
+    if (studentRecipientEl) studentRecipientEl.innerHTML = optionsHtml;
+  }
+
+  // --- TEACHER DASHBOARD ---
   renderTeacherDashboard() {
     if (!this.currentUser || this.currentUser.role !== 'teacher') return;
 
     const mySubject = this.currentUser.subjectCode;
 
     const subjectListEl = document.getElementById('teacher-subject-list');
-    subjectListEl.innerHTML = this.subjects.map(code => {
-      const count = (this.resources || []).filter(r => r.subject === code).length;
-      const isMySubject = code === mySubject;
-      const isActive = code === this.activeTeacherSubject;
+    if (subjectListEl) {
+      subjectListEl.innerHTML = this.subjects.map(code => {
+        const count = (this.resources || []).filter(r => r.subject === code).length;
+        const isMySubject = code === mySubject;
+        const isActive = code === this.activeTeacherSubject;
 
-      return `
-        <div class="subject-item ${isActive ? 'active' : ''}" onclick="app.selectTeacherSubject('${code}')">
-          <span><i class="fa-solid fa-book-bookmark"></i> ${code}</span>
-          <span class="badge" style="${isMySubject ? 'background: var(--accent-indigo); color: #fff;' : ''}">
-            ${isMySubject ? 'MY SUBJECT' : `${count}`}
-          </span>
-        </div>
-      `;
-    }).join('');
+        return `
+          <div class="subject-item ${isActive ? 'active' : ''}" onclick="app.selectTeacherSubject('${code}')">
+            <span><i class="fa-solid fa-book-bookmark"></i> ${code}</span>
+            <span class="badge" style="${isMySubject ? 'background: var(--accent-indigo); color: #fff;' : ''}">
+              ${isMySubject ? 'MY SUBJECT' : `${count}`}
+            </span>
+          </div>
+        `;
+      }).join('');
+    }
 
     document.getElementById('teacher-active-subject').innerText = this.activeTeacherSubject;
     
@@ -256,7 +352,6 @@ class CampusNetApp {
       }
     }
 
-    this.updateStudentDropdowns();
     this.renderTeacherFilesTable();
     this.renderTeacherInboxTable();
     this.renderRegisteredStudentsRoster();
@@ -286,180 +381,10 @@ class CampusNetApp {
     document.getElementById('teacher-view-title').innerText = titleMap[tabName];
   }
 
-  openUploadModal() {
-    if (!this.currentUser || this.currentUser.role !== 'teacher') return;
-    const mySubject = this.currentUser.subjectCode;
-
-    if (this.activeTeacherSubject !== mySubject) {
-      this.showToast(`Permission Denied: You are Teacher ${mySubject}. You can only upload to ${mySubject}!`, 'error');
-      return;
-    }
-
-    document.getElementById('upload-subject-code').value = mySubject;
-    document.getElementById('upload-file-title').value = '';
-    document.getElementById('modal-upload').classList.add('active');
-  }
-
-  closeModal(modalId) {
-    document.getElementById(modalId).classList.remove('active');
-  }
-
-  async handleResourceUpload(e) {
-    e.preventDefault();
-    if (!this.currentUser || this.currentUser.role !== 'teacher') return;
-
-    const mySubject = this.currentUser.subjectCode;
-    const title = document.getElementById('upload-file-title').value.trim();
-    const size = document.getElementById('upload-file-size').value.trim() || '2.4 MB';
-
-    if (!title) return;
-
-    try {
-      const response = await fetch(`${this.apiBase}/resources/upload`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          subject: mySubject,
-          size,
-          teacherSubject: mySubject,
-          fileContent: `Sample study content for ${title}`
-        })
-      });
-
-      const data = await response.json();
-      if (response.ok && data.success) {
-        this.showToast(`Uploaded "${title}" to ${mySubject}!`, 'success');
-      }
-    } catch (err) {
-      const newResource = { id: Date.now(), name: title, subject: mySubject, uploadedBy: `Teacher ${mySubject}`, date: new Date().toISOString().split('T')[0], size };
-      this.resources.unshift(newResource);
-      this.saveResources();
-      this.showToast(`Uploaded "${title}" to ${mySubject}!`, 'success');
-    }
-
-    this.closeModal('modal-upload');
-    await this.initData();
-    this.renderTeacherDashboard();
-  }
-
-  async deleteResource(id) {
-    if (!this.currentUser || this.currentUser.role !== 'teacher') return;
-    const mySubject = this.currentUser.subjectCode;
-
-    if (!confirm('Are you sure you want to delete this resource?')) return;
-
-    try {
-      const response = await fetch(`${this.apiBase}/resources/${id}?teacherSubject=${mySubject}`, {
-        method: 'DELETE'
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        this.showToast(`Resource deleted from ${mySubject}`, 'info');
-      }
-    } catch (err) {
-      this.resources = this.resources.filter(r => r.id !== id);
-      this.saveResources();
-      this.showToast('Resource deleted', 'info');
-    }
-
-    await this.initData();
-    this.renderTeacherDashboard();
-  }
-
-  async handleRegisterStudent(e) {
-    e.preventDefault();
-    const name = document.getElementById('reg-student-name').value.trim();
-    const studentId = document.getElementById('reg-student-id').value.trim();
-    const section = document.getElementById('reg-student-section').value;
-    const password = document.getElementById('reg-student-password').value.trim() || 'student123';
-    const mySubject = this.currentUser ? this.currentUser.subjectCode : 'CN';
-
-    if (!name || !studentId) {
-      this.showToast('Please provide student name and ID', 'error');
-      return;
-    }
-
-    try {
-      const response = await fetch(`${this.apiBase}/students/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, studentId, section, password, teacherSubject: mySubject })
-      });
-
-      const data = await response.json();
-      if (response.ok && data.success) {
-        this.showToast(`Successfully registered "${name}" to backend API!`, 'success');
-      } else {
-        this.showToast(data.message || 'Registration failed', 'error');
-      }
-    } catch (err) {
-      this.students.push({ id: studentId, name, section, password });
-      this.saveStudents();
-      this.showToast(`Registered "${name}"`, 'success');
-    }
-
-    document.getElementById('reg-student-name').value = '';
-    document.getElementById('reg-student-id').value = '';
-
-    await this.initData();
-    this.renderTeacherDashboard();
-  }
-
-  renderRegisteredStudentsRoster() {
-    const tbody = document.getElementById('registered-students-tbody');
-    if (!tbody) return;
-
-    tbody.innerHTML = (this.students || []).map(s => `
-      <tr>
-        <td>
-          <div class="file-name-cell">
-            <span class="user-badge" style="margin-right: 0.5rem;"><span class="role-dot student"></span> ${s.name}</span>
-          </div>
-        </td>
-        <td><code>${s.id}</code></td>
-        <td>${s.section}</td>
-        <td><code>${s.password}</code></td>
-      </tr>
-    `).join('');
-  }
-
-  async executeTeacherTransferToStudent() {
-    const recipient = document.getElementById('teacher-send-recipient-student').value;
-    const fileName = document.getElementById('teacher-send-file-name').value.trim();
-    const mySubject = this.currentUser ? this.currentUser.subjectCode : 'CN';
-
-    if (!fileName) {
-      this.showToast('Please enter a file name to send', 'error');
-      return;
-    }
-
-    try {
-      await fetch(`${this.apiBase}/transfers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          from: `Teacher ${mySubject}`,
-          to: recipient,
-          type: 'teacher_to_student',
-          subject: mySubject,
-          fileName
-        })
-      });
-      this.showToast(`Sent "${fileName}" to student ${recipient}!`, 'success');
-    } catch (err) {
-      this.transfers.unshift({ id: Date.now(), from: `Teacher ${mySubject}`, to: recipient, type: 'teacher_to_student', subject: mySubject, fileName, date: new Date().toLocaleTimeString() });
-      this.saveTransfers();
-      this.showToast(`Sent "${fileName}" to ${recipient}`, 'success');
-    }
-
-    await this.initData();
-    this.renderTeacherDashboard();
-    this.showTeacherTab('notifications');
-  }
-
   renderTeacherFilesTable() {
     const tbody = document.getElementById('teacher-files-tbody');
+    if (!tbody) return;
+
     const files = (this.resources || []).filter(r => r.subject === this.activeTeacherSubject);
     const mySubject = this.currentUser ? this.currentUser.subjectCode : '';
 
@@ -479,137 +404,285 @@ class CampusNetApp {
 
     tbody.innerHTML = files.map(file => {
       const isMySubjectFile = file.subject === mySubject;
+      const isMissing = !!file.missingOnDisk;
+
       return `
         <tr>
           <td>
             <div class="file-name-cell">
               <span class="file-icon"><i class="fa-solid fa-file-pdf"></i></span>
-              ${file.name}
+              <strong>${this.escapeHtml(file.name)}</strong>
+              ${file.originalName && file.originalName !== file.name ? `<br><small style="color: var(--text-muted); font-size:0.75rem;">${this.escapeHtml(file.originalName)}</small>` : ''}
             </div>
           </td>
-          <td><span class="user-badge"><span class="role-dot teacher"></span> ${file.uploadedBy}</span></td>
-          <td>${file.date}</td>
-          <td>${file.size}</td>
+          <td><span class="user-badge"><span class="role-dot teacher"></span> ${this.escapeHtml(file.uploadedBy)}</span></td>
+          <td>${this.escapeHtml(file.date || file.uploadedAt || 'N/A')}</td>
+          <td>${this.escapeHtml(file.size || 'N/A')}</td>
           <td>
-            ${isMySubjectFile ? `
-              <button class="btn btn-danger btn-sm" onclick="app.deleteResource(${file.id})">
-                <i class="fa-solid fa-trash-can"></i> Delete
-              </button>
-            ` : '<span style="color:var(--text-dim); font-size:0.8rem;"><i class="fa-solid fa-lock"></i> View Only</span>'}
+            <div style="display: flex; gap: 0.4rem; align-items: center;">
+              ${isMissing ? `
+                <button class="btn btn-outline btn-sm" disabled style="opacity: 0.5;" title="File missing on server storage">
+                  <i class="fa-solid fa-ban"></i> Unavailable
+                </button>
+              ` : `
+                <button class="btn btn-primary btn-sm" onclick="app.downloadResource('${file.id}')">
+                  <i class="fa-solid fa-download"></i> Download
+                </button>
+              `}
+              ${isMySubjectFile ? `
+                <button class="btn btn-danger btn-sm" onclick="app.deleteResource('${file.id}')">
+                  <i class="fa-solid fa-trash-can"></i> Delete
+                </button>
+              ` : '<span style="color:var(--text-dim); font-size:0.8rem;"><i class="fa-solid fa-lock"></i> View Only</span>'}
+            </div>
           </td>
         </tr>
       `;
     }).join('');
   }
 
-  renderTeacherInboxTable() {
-    const tbody = document.getElementById('teacher-inbox-tbody');
-    const teacherName = `Teacher ${this.activeTeacherSubject}`;
-    
-    const submissions = (this.transfers || []).filter(t => t.type === 'student_to_teacher' && (t.to === teacherName || t.subject === this.activeTeacherSubject));
+  // --- TEACHER UPLOAD MODAL & SUBMISSION ---
+  openUploadModal() {
+    if (!this.currentUser || this.currentUser.role !== 'teacher') return;
+    const mySubject = this.currentUser.subjectCode;
 
-    if (submissions.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="5">
-            <div class="empty-state">
-              <div class="empty-state-icon"><i class="fa-solid fa-inbox"></i></div>
-              <p>No student submissions received for ${this.activeTeacherSubject}.</p>
-            </div>
-          </td>
-        </tr>
-      `;
+    if (this.activeTeacherSubject !== mySubject) {
+      this.showToast(`Permission Denied: You are Teacher ${mySubject}. You can only upload to ${mySubject}!`, 'error');
       return;
     }
 
-    tbody.innerHTML = submissions.map(sub => `
-      <tr>
-        <td><span class="user-badge"><span class="role-dot student"></span> ${sub.from}</span></td>
-        <td><strong style="color: var(--primary-blue);">${sub.subject || this.activeTeacherSubject}</strong></td>
-        <td>
-          <div class="file-name-cell">
-            <span class="file-icon" style="background: #e0e7ff; color: #4338ca;">
-              <i class="fa-solid fa-file-lines"></i>
-            </span>
-            ${sub.fileName}
-          </div>
-        </td>
-        <td>${sub.date}</td>
-        <td>
-          <button class="btn btn-outline btn-sm" onclick="app.downloadFile('${sub.fileName}')">
-            <i class="fa-solid fa-download"></i> Download Submission
-          </button>
-        </td>
-      </tr>
-    `).join('');
+    document.getElementById('upload-subject-code').value = mySubject;
+    document.getElementById('upload-file-title').value = '';
+    
+    const fileInput = document.getElementById('upload-file');
+    if (fileInput) fileInput.value = '';
+    
+    const infoBox = document.getElementById('file-selected-info');
+    if (infoBox) {
+      infoBox.style.display = 'none';
+      infoBox.innerHTML = '';
+    }
+
+    const btnSubmit = document.getElementById('btn-submit-upload');
+    if (btnSubmit) {
+      btnSubmit.disabled = false;
+      btnSubmit.innerHTML = '<i class="fa-solid fa-upload"></i> Publish File for Students';
+    }
+
+    document.getElementById('modal-upload').classList.add('active');
   }
 
-  renderTeacherAuditLogs() {
-    const tbody = document.getElementById('teacher-logs-tbody');
-    
-    tbody.innerHTML = (this.transfers || []).map(t => {
-      let badgeColor = 'var(--primary-blue)';
-      let details = '';
+  closeModal(modalId) {
+    document.getElementById(modalId).classList.remove('active');
+  }
 
-      if (t.type === 'student_to_student') {
-        badgeColor = 'var(--warning)';
-        details = `Student <strong>${t.from}</strong> sent a file to Student <strong>${t.to}</strong> (<code>${t.fileName}</code>)`;
-      } else if (t.type === 'student_to_teacher') {
-        badgeColor = 'var(--accent-indigo)';
-        details = `Student <strong>${t.from}</strong> submitted <code>${t.fileName}</code> to <strong>${t.to}</strong>`;
-      } else if (t.type === 'teacher_to_student') {
-        badgeColor = 'var(--accent-indigo)';
-        details = `You (<strong>${t.from}</strong>) sent direct file <code>${t.fileName}</code> to Student <strong>${t.to}</strong>`;
-      } else if (t.type === 'student_registered') {
-        badgeColor = 'var(--success)';
-        details = `Registered new student <strong>${t.to}</strong> (<code>${t.fileName}</code>)`;
+  handleFileSelectChange(e) {
+    const file = e.target.files && e.target.files[0];
+    const infoBox = document.getElementById('file-selected-info');
+    const titleInput = document.getElementById('upload-file-title');
+
+    if (!file) {
+      if (infoBox) infoBox.style.display = 'none';
+      return;
+    }
+
+    const allowedExts = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.txt', '.png', '.jpg', '.jpeg'];
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+
+    if (!allowedExts.includes(ext)) {
+      this.showToast(`File type "${ext}" is not supported. Supported: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, PNG, JPG, JPEG`, 'error');
+      e.target.value = '';
+      if (infoBox) infoBox.style.display = 'none';
+      return;
+    }
+
+    const maxBytes = 25 * 1024 * 1024; // 25 MiB
+    if (file.size > maxBytes) {
+      this.showToast(`File size (${this.formatBytes(file.size)}) exceeds the maximum limit of 25 MiB.`, 'error');
+      e.target.value = '';
+      if (infoBox) infoBox.style.display = 'none';
+      return;
+    }
+
+    if (infoBox) {
+      infoBox.style.display = 'block';
+      infoBox.innerHTML = `<i class="fa-solid fa-file-circle-check"></i> Selected: <strong>${this.escapeHtml(file.name)}</strong> (${this.formatBytes(file.size)})`;
+    }
+
+    if (titleInput && !titleInput.value.trim()) {
+      titleInput.placeholder = file.name;
+    }
+  }
+
+  async handleResourceUpload(e) {
+    e.preventDefault();
+    if (!this.currentUser || this.currentUser.role !== 'teacher') return;
+
+    const fileInput = document.getElementById('upload-file');
+    const file = fileInput && fileInput.files && fileInput.files[0];
+
+    if (!file) {
+      this.showToast('Please select a file to upload', 'error');
+      return;
+    }
+
+    const mySubject = this.currentUser.subjectCode;
+    const title = document.getElementById('upload-file-title').value.trim() || file.name;
+
+    const btnSubmit = document.getElementById('btn-submit-upload');
+    if (btnSubmit) {
+      btnSubmit.disabled = true;
+      btnSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('subject', mySubject);
+    formData.append('title', title);
+
+    try {
+      const response = await fetch(`${this.apiBase}/resources/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.token}`
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        this.showToast(`Uploaded "${title}" to ${mySubject}!`, 'success');
+        this.closeModal('modal-upload');
+        await this.loadResources();
       } else {
-        badgeColor = 'var(--success)';
-        details = `Uploaded <code>${t.fileName}</code> to <strong>${t.subject || 'Course'}</strong>`;
+        this.showToast(data.message || 'Upload failed', 'error');
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.innerHTML = '<i class="fa-solid fa-upload"></i> Publish File for Students';
+        }
+      }
+    } catch (err) {
+      this.showToast('Network error during upload. Check backend connection.', 'error');
+      if (btnSubmit) {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = '<i class="fa-solid fa-upload"></i> Publish File for Students';
+      }
+    }
+  }
+
+  async deleteResource(id) {
+    if (!this.currentUser || this.currentUser.role !== 'teacher') return;
+
+    if (!confirm('Are you sure you want to delete this resource?')) return;
+
+    try {
+      const response = await fetch(`${this.apiBase}/resources/${id}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeaders()
+      });
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        this.showToast('Resource deleted successfully', 'info');
+        await this.loadResources();
+      } else {
+        this.showToast(data.message || 'Failed to delete resource', 'error');
+      }
+    } catch (err) {
+      this.showToast('Network error while deleting resource', 'error');
+    }
+  }
+
+  // --- DOWNLOAD RESOURCE FILE (Protected Endpoint) ---
+  async downloadResource(resourceId) {
+    if (!this.token) {
+      this.showToast('Authentication required to download files', 'error');
+      return;
+    }
+
+    this.showToast('Starting download...', 'info');
+
+    try {
+      const response = await fetch(`${this.apiBase}/resources/${resourceId}/download`, {
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        let errMessage = 'Download failed';
+        try {
+          const data = await response.json();
+          errMessage = data.message || errMessage;
+        } catch (e) {}
+        this.showToast(errMessage, 'error');
+        return;
       }
 
-      return `
-        <tr>
-          <td style="font-family: monospace; color: var(--text-muted);">${t.date}</td>
-          <td>
-            <span class="badge" style="background: #f1f5f9; border: 1px solid var(--border-light); color: ${badgeColor}; font-weight:700;">
-              ${t.type.replace(/_/g, ' ').toUpperCase()}
-            </span>
-          </td>
-          <td>${details}</td>
-        </tr>
-      `;
-    }).join('');
+      // Extract filename from Content-Disposition header if available
+      let filename = 'downloaded_resource';
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition) {
+        const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        if (utfMatch && utfMatch[1]) {
+          filename = decodeURIComponent(utfMatch[1]);
+        } else {
+          const regMatch = disposition.match(/filename="?([^";]+)"?/i);
+          if (regMatch && regMatch[1]) {
+            filename = decodeURIComponent(regMatch[1]);
+          }
+        }
+      } else {
+        const found = (this.resources || []).find(r => String(r.id) === String(resourceId));
+        if (found) {
+          filename = found.originalName || found.name;
+        }
+      }
+
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+
+    } catch (err) {
+      this.showToast('Network error during file download.', 'error');
+    }
   }
 
-  // --- STUDENT DASHBOARD RENDER ---
-  async renderStudentDashboard() {
+  // --- STUDENT DASHBOARD & RESOURCES ---
+  renderStudentDashboard() {
     if (!this.currentUser || this.currentUser.role !== 'student') return;
 
-    await this.initData();
     document.getElementById('student-display-name').innerText = this.currentUser.name;
 
     const subjectListEl = document.getElementById('student-subject-list');
-    
-    let html = `
-      <div class="subject-item ${this.activeStudentSubject === 'ALL' ? 'active' : ''}" onclick="app.selectStudentSubject('ALL')">
-        <span><i class="fa-solid fa-layer-group"></i> All Subjects</span>
-        <span class="badge">${(this.resources || []).length}</span>
-      </div>
-    `;
-
-    this.subjects.forEach(code => {
-      const count = (this.resources || []).filter(r => r.subject === code).length;
-      const isActive = code === this.activeStudentSubject;
-      html += `
-        <div class="subject-item ${isActive ? 'active' : ''}" onclick="app.selectStudentSubject('${code}')">
-          <span><i class="fa-solid fa-book"></i> ${code}</span>
-          <span class="badge">${count}</span>
+    if (subjectListEl) {
+      let html = `
+        <div class="subject-item ${this.activeStudentSubject === 'ALL' ? 'active' : ''}" onclick="app.selectStudentSubject('ALL')">
+          <span><i class="fa-solid fa-layer-group"></i> All Subjects</span>
+          <span class="badge">${(this.resources || []).length}</span>
         </div>
       `;
-    });
 
-    subjectListEl.innerHTML = html;
+      this.subjects.forEach(code => {
+        const count = (this.resources || []).filter(r => r.subject === code).length;
+        const isActive = code === this.activeStudentSubject;
+        html += `
+          <div class="subject-item ${isActive ? 'active' : ''}" onclick="app.selectStudentSubject('${code}')">
+            <span><i class="fa-solid fa-book"></i> ${code}</span>
+            <span class="badge">${count}</span>
+          </div>
+        `;
+      });
+
+      subjectListEl.innerHTML = html;
+    }
+
     this.renderStudentResourcesTable();
     this.renderStudentInboxTable();
   }
@@ -635,6 +708,8 @@ class CampusNetApp {
 
   renderStudentResourcesTable() {
     const tbody = document.getElementById('student-resources-tbody');
+    if (!tbody) return;
+
     let files = this.resources || [];
     if (this.activeStudentSubject !== 'ALL') {
       files = files.filter(r => r.subject === this.activeStudentSubject);
@@ -654,30 +729,176 @@ class CampusNetApp {
       return;
     }
 
-    tbody.innerHTML = files.map(file => `
+    tbody.innerHTML = files.map(file => {
+      const isMissing = !!file.missingOnDisk;
+
+      return `
+        <tr>
+          <td>
+            <div class="file-name-cell">
+              <span class="file-icon"><i class="fa-solid fa-file-pdf"></i></span>
+              <strong>${this.escapeHtml(file.name)}</strong>
+              ${file.originalName && file.originalName !== file.name ? `<br><small style="color: var(--text-muted); font-size:0.75rem;">${this.escapeHtml(file.originalName)}</small>` : ''}
+            </div>
+          </td>
+          <td><strong style="color: var(--primary-blue);">${this.escapeHtml(file.subject)}</strong></td>
+          <td><span class="user-badge"><span class="role-dot teacher"></span> ${this.escapeHtml(file.uploadedBy)}</span></td>
+          <td>${this.escapeHtml(file.size || 'N/A')}</td>
+          <td>
+            ${isMissing ? `
+              <button class="btn btn-outline btn-sm" disabled style="opacity: 0.5;" title="File missing on server storage">
+                <i class="fa-solid fa-ban"></i> Unavailable
+              </button>
+            ` : `
+              <button class="btn btn-primary btn-sm" onclick="app.downloadResource('${file.id}')">
+                <i class="fa-solid fa-download"></i> Download
+              </button>
+            `}
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  // --- STUDENT REGISTRATION ROSTER ---
+  renderRegisteredStudentsRoster() {
+    const tbody = document.getElementById('registered-students-tbody');
+    if (!tbody) return;
+
+    tbody.innerHTML = (this.students || []).map(s => `
       <tr>
         <td>
           <div class="file-name-cell">
-            <span class="file-icon"><i class="fa-solid fa-file-pdf"></i></span>
-            ${file.name}
+            <span class="user-badge" style="margin-right: 0.5rem;"><span class="role-dot student"></span> ${this.escapeHtml(s.name)}</span>
           </div>
         </td>
-        <td><strong style="color: var(--primary-blue);">${file.subject}</strong></td>
-        <td><span class="user-badge"><span class="role-dot teacher"></span> ${file.uploadedBy}</span></td>
-        <td>${file.size}</td>
+        <td><code>${this.escapeHtml(s.id)}</code></td>
+        <td>${this.escapeHtml(s.section)}</td>
+      </tr>
+    `).join('');
+  }
+
+  async handleRegisterStudent(e) {
+    e.preventDefault();
+    const name = document.getElementById('reg-student-name').value.trim();
+    const studentId = document.getElementById('reg-student-id').value.trim();
+    const section = document.getElementById('reg-student-section').value;
+    const password = document.getElementById('reg-student-password').value.trim() || 'student123';
+
+    if (!name || !studentId) {
+      this.showToast('Please provide student name and ID', 'error');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.apiBase}/students/register`, {
+        method: 'POST',
+        headers: this.getAuthHeaders('application/json'),
+        body: JSON.stringify({ name, studentId, section, password })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        this.showToast(`Successfully registered "${name}"!`, 'success');
+        document.getElementById('reg-student-name').value = '';
+        document.getElementById('reg-student-id').value = '';
+        await this.loadStudentRoster();
+      } else {
+        this.showToast(data.message || 'Registration failed', 'error');
+      }
+    } catch (err) {
+      this.showToast('Network error during student registration', 'error');
+    }
+  }
+
+  // --- TRANSFERS DEMO FLOWS ---
+  renderTeacherInboxTable() {
+    const tbody = document.getElementById('teacher-inbox-tbody');
+    if (!tbody) return;
+
+    const teacherName = `Teacher ${this.activeTeacherSubject}`;
+    const submissions = (this.transfers || []).filter(t => t.type === 'student_to_teacher' && (t.to === teacherName || t.subject === this.activeTeacherSubject));
+
+    if (submissions.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="5">
+            <div class="empty-state">
+              <div class="empty-state-icon"><i class="fa-solid fa-inbox"></i></div>
+              <p>No student submissions received for ${this.activeTeacherSubject}.</p>
+            </div>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tbody.innerHTML = submissions.map(sub => `
+      <tr>
+        <td><span class="user-badge"><span class="role-dot student"></span> ${this.escapeHtml(sub.from)}</span></td>
+        <td><strong style="color: var(--primary-blue);">${this.escapeHtml(sub.subject || this.activeTeacherSubject)}</strong></td>
         <td>
-          <button class="btn btn-primary btn-sm" onclick="app.downloadFile('${file.filename || file.name}')">
-            <i class="fa-solid fa-download"></i> Download
+          <div class="file-name-cell">
+            <span class="file-icon" style="background: #e0e7ff; color: #4338ca;">
+              <i class="fa-solid fa-file-lines"></i>
+            </span>
+            ${this.escapeHtml(sub.fileName)}
+          </div>
+        </td>
+        <td>${this.escapeHtml(sub.date)}</td>
+        <td>
+          <button class="btn btn-outline btn-sm" onclick="app.showToast('Submission records are metadata logs in this demo flow.', 'info')">
+            <i class="fa-solid fa-info-circle"></i> Demo Submission
           </button>
         </td>
       </tr>
     `).join('');
   }
 
+  renderTeacherAuditLogs() {
+    const tbody = document.getElementById('teacher-logs-tbody');
+    if (!tbody) return;
+
+    tbody.innerHTML = (this.transfers || []).map(t => {
+      let badgeColor = 'var(--primary-blue)';
+      let details = '';
+
+      if (t.type === 'student_to_student') {
+        badgeColor = 'var(--warning)';
+        details = `Student <strong>${this.escapeHtml(t.from)}</strong> sent a file to Student <strong>${this.escapeHtml(t.to)}</strong> (<code>${this.escapeHtml(t.fileName)}</code>)`;
+      } else if (t.type === 'student_to_teacher') {
+        badgeColor = 'var(--accent-indigo)';
+        details = `Student <strong>${this.escapeHtml(t.from)}</strong> submitted <code>${this.escapeHtml(t.fileName)}</code> to <strong>${this.escapeHtml(t.to)}</strong>`;
+      } else if (t.type === 'teacher_to_student') {
+        badgeColor = 'var(--accent-indigo)';
+        details = `You (<strong>${this.escapeHtml(t.from)}</strong>) sent direct file <code>${this.escapeHtml(t.fileName)}</code> to Student <strong>${this.escapeHtml(t.to)}</strong>`;
+      } else if (t.type === 'student_registered') {
+        badgeColor = 'var(--success)';
+        details = `Registered new student <strong>${this.escapeHtml(t.to)}</strong> (<code>${this.escapeHtml(t.fileName)}</code>)`;
+      } else {
+        badgeColor = 'var(--success)';
+        details = `Uploaded <code>${this.escapeHtml(t.fileName)}</code> to <strong>${this.escapeHtml(t.subject || 'Course')}</strong>`;
+      }
+
+      return `
+        <tr>
+          <td style="font-family: monospace; color: var(--text-muted);">${this.escapeHtml(t.date)}</td>
+          <td>
+            <span class="badge" style="background: #f1f5f9; border: 1px solid var(--border-light); color: ${badgeColor}; font-weight:700;">
+              ${this.escapeHtml(t.type.replace(/_/g, ' ').toUpperCase())}
+            </span>
+          </td>
+          <td>${details}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
   renderStudentInboxTable() {
     const tbody = document.getElementById('student-inbox-tbody');
-    const myName = this.currentUser.name;
+    if (!tbody || !this.currentUser) return;
 
+    const myName = this.currentUser.name;
     const history = (this.transfers || []).filter(t => t.from === myName || t.to === myName);
 
     if (history.length === 0) {
@@ -698,22 +919,22 @@ class CampusNetApp {
       const isSender = t.from === myName;
       return `
         <tr>
-          <td style="font-family: monospace; color: var(--text-muted);">${t.date}</td>
+          <td style="font-family: monospace; color: var(--text-muted);">${this.escapeHtml(t.date)}</td>
           <td>
             <span class="badge" style="background: #f1f5f9; color: ${isSender ? 'var(--warning)' : 'var(--success)'}; font-weight:700;">
               ${isSender ? 'SENT' : 'RECEIVED'}
             </span>
           </td>
-          <td>${isSender ? `To: <strong>${t.to}</strong>` : `From: <strong>${t.from}</strong>`}</td>
+          <td>${isSender ? `To: <strong>${this.escapeHtml(t.to)}</strong>` : `From: <strong>${this.escapeHtml(t.from)}</strong>`}</td>
           <td>
             <div class="file-name-cell">
               <span class="file-icon" style="background: #dbeafe;"><i class="fa-solid fa-file-arrow-up"></i></span>
-              ${t.fileName}
+              ${this.escapeHtml(t.fileName)}
             </div>
           </td>
           <td>
-            <button class="btn btn-outline btn-sm" onclick="app.downloadFile('${t.fileName}')">
-              <i class="fa-solid fa-download"></i> Download
+            <button class="btn btn-outline btn-sm" onclick="app.showToast('Transfer records are metadata logs in this demo flow.', 'info')">
+              <i class="fa-solid fa-info-circle"></i> Demo Log
             </button>
           </td>
         </tr>
@@ -749,7 +970,7 @@ class CampusNetApp {
     try {
       await fetch(`${this.apiBase}/transfers`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAuthHeaders('application/json'),
         body: JSON.stringify({
           from: this.currentUser.name,
           to: recipient,
@@ -758,27 +979,48 @@ class CampusNetApp {
           fileName: fileName
         })
       });
-      this.showToast(`Transferred "${fileName}" to ${recipient}!`, 'success');
+      this.showToast(`Transfer log recorded for "${fileName}" to ${recipient}!`, 'success');
+      await this.loadTransfers();
+      this.showStudentTab('inbox');
     } catch (err) {
-      this.transfers.unshift({ id: Date.now(), from: this.currentUser.name, to: recipient, type: type === 'student' ? 'student_to_student' : 'student_to_teacher', subject: targetSubject, fileName, date: new Date().toLocaleTimeString() });
-      this.saveTransfers();
-      this.showToast(`Transferred "${fileName}" to ${recipient}`, 'success');
+      this.showToast('Network error recording transfer log', 'error');
     }
-
-    await this.initData();
-    this.renderStudentDashboard();
-    this.showStudentTab('inbox');
   }
 
-  downloadFile(fileName) {
-    if (this.apiBase) {
-      window.open(`${this.apiBase}/../uploads/${fileName}`, '_blank');
+  async executeTeacherTransferToStudent() {
+    const recipient = document.getElementById('teacher-send-recipient-student').value;
+    const fileName = document.getElementById('teacher-send-file-name').value.trim();
+    const mySubject = this.currentUser ? this.currentUser.subjectCode : 'CN';
+
+    if (!fileName) {
+      this.showToast('Please enter a file name to send', 'error');
+      return;
     }
-    this.showToast(`Download started for "${fileName}"`, 'info');
+
+    try {
+      await fetch(`${this.apiBase}/transfers`, {
+        method: 'POST',
+        headers: this.getAuthHeaders('application/json'),
+        body: JSON.stringify({
+          from: `Teacher ${mySubject}`,
+          to: recipient,
+          type: 'teacher_to_student',
+          subject: mySubject,
+          fileName
+        })
+      });
+      this.showToast(`Transfer log recorded for "${fileName}" to ${recipient}!`, 'success');
+      await this.loadTransfers();
+      this.showTeacherTab('notifications');
+    } catch (err) {
+      this.showToast('Network error recording transfer log', 'error');
+    }
   }
 
   showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
+    if (!container) return;
+
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     
@@ -788,7 +1030,7 @@ class CampusNetApp {
       error: '<i class="fa-solid fa-circle-exclamation" style="color: var(--danger);"></i>'
     };
 
-    toast.innerHTML = `${icons[type]} <span>${message}</span>`;
+    toast.innerHTML = `${icons[type] || ''} <span>${this.escapeHtml(message)}</span>`;
     container.appendChild(toast);
 
     setTimeout(() => {
@@ -796,10 +1038,6 @@ class CampusNetApp {
       toast.style.transform = 'translateX(100%)';
       setTimeout(() => toast.remove(), 300);
     }, 3500);
-  }
-
-  render() {
-    this.showView('landing');
   }
 }
 

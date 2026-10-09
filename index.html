@@ -282,9 +282,14 @@
               </h2>
             </div>
             
-            <button id="teacher-upload-btn" class="btn btn-purple btn-sm" onclick="app.openUploadModal()">
-              <i class="fa-solid fa-cloud-arrow-up"></i> Upload Resource
-            </button>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn btn-outline btn-sm" onclick="app.loadResources()">
+                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+              </button>
+              <button id="teacher-upload-btn" class="btn btn-purple btn-sm" onclick="app.openUploadModal()">
+                <i class="fa-solid fa-cloud-arrow-up"></i> Upload Resource
+              </button>
+            </div>
           </div>
 
           <!-- Tab Content 1: Resources -->
@@ -293,7 +298,7 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>File Name</th>
+                    <th>File Name / Title</th>
                     <th>Uploaded By</th>
                     <th>Upload Date</th>
                     <th>Size</th>
@@ -403,7 +408,6 @@
                       <th>Student Name</th>
                       <th>Student ID</th>
                       <th>Section</th>
-                      <th>Password</th>
                     </tr>
                   </thead>
                   <tbody id="registered-students-tbody">
@@ -473,6 +477,10 @@
               </span>
               <h2 class="section-title" id="student-view-title">Subject Learning Materials</h2>
             </div>
+            
+            <button class="btn btn-outline btn-sm" onclick="app.loadResources()">
+              <i class="fa-solid fa-arrows-rotate"></i> Refresh
+            </button>
           </div>
 
           <!-- Student Tab: Resources -->
@@ -481,7 +489,7 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>File Name</th>
+                    <th>File Name / Title</th>
                     <th>Subject</th>
                     <th>Uploaded By</th>
                     <th>Size</th>
@@ -580,16 +588,20 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Resource Title / File Name</label>
-          <input type="text" id="upload-file-title" class="form-control" placeholder="e.g. Module 2 Notes.pdf" required>
+          <label class="form-label">Select File to Upload <span style="color: var(--danger);">*</span></label>
+          <input type="file" id="upload-file" class="form-control" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.png,.jpg,.jpeg" required onchange="app.handleFileSelectChange(event)">
+          <div id="file-selected-info" style="font-size: 0.85rem; color: var(--accent-indigo); font-weight: 600; margin-top: 0.4rem; display: none;"></div>
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.3rem;">
+            Supported formats: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, PNG, JPG, JPEG (Max 25 MiB).
+          </p>
         </div>
 
         <div class="form-group">
-          <label class="form-label">File Size</label>
-          <input type="text" id="upload-file-size" class="form-control" value="2.4 MB" required>
+          <label class="form-label">Display Title (Optional)</label>
+          <input type="text" id="upload-file-title" class="form-control" placeholder="Defaults to filename if left empty">
         </div>
 
-        <button type="submit" class="btn btn-purple" style="width: 100%; margin-top: 1rem;">
+        <button type="submit" id="btn-submit-upload" class="btn btn-purple" style="width: 100%; margin-top: 1rem;">
           <i class="fa-solid fa-upload"></i> Publish File for Students
         </button>
       </form>
